@@ -1,4 +1,4 @@
-name: Sync Fork (彻底跳过 Workflows)
+name: Sync Fork (稳定版·跳过 Workflows)
 
 on:
   schedule:
@@ -33,37 +33,53 @@ jobs:
       - name: Install GitHub CLI (if missing)
         run: sudo apt-get update && sudo apt-get install -y gh
 
-      - name: Sync with upstream (排除 workflow 文件)
+      - name: Sync with upstream (彻底跳过 Workflows)
         run: |
           git checkout develop
           git pull origin develop  # 拉取本地最新变更
 
-          # 关键：合并上游所有文件，但排除 .github/workflows/ 目录
-          # 语法：git merge <上游分支> --no-edit -- <要合并的路径> :! <要排除的路径>
-          if git merge upstream/develop --no-edit -- . :!.github/workflows/; then
-            echo "✅ 合并成功（已排除 workflow 文件），推送变更"
-            git push origin develop
-          else
-            echo "⚠️  检测到冲突（非 workflow 文件），创建PR"
-            sync_branch="sync-upstream-$(date +%Y%m%d%H%M%S)"
-            git checkout -b $sync_branch
-            
-            # 仅添加非 workflow 目录的冲突文件
-            git add . -- ':!.github/workflows/'
-            # 避免空提交
-            if git diff --cached --quiet; then
-              echo "无需要提交的变更，直接推送分支"
-            else
-              git commit -am "自动同步上游分支（排除 workflows）$(date +'%Y-%m-%d')"
-            fi
-            
-            git push origin $sync_branch
-            gh pr create \
-              --title "🔄 上游同步: $(date +'%Y-%m-%d')（排除 workflows）" \
-              --body "自动同步上游 develop 分支，已强制排除 .github/workflows/ 目录（避免权限问题）" \
-              --base develop \
-              --head $sync_branch \
-              --label "sync-upstream"
+          # 修复合并语法：用 git checkout 单独合并非 workflow 文件（更稳定）
+          # 逻辑：先检出上游所有文件，再恢复本地 workflow 目录（覆盖上游变更）
+          git checkout upstream/develop -- .  # 合并上游所有文件到本地
+          git checkout HEAD -- .github/workflows/  # 恢复本地 workflow 目录（不覆盖）
+          
+          # 检查是否有变更需要推送
+          if git diff --quiet origin/develop; then
+            echo "✅ 本地分支已与上游同步，无变更需要推送"
+            exit 0
           fi
+
+          # 提交变更并推送
+          git add .
+          git commit -am "🔄 同步上游 develop 分支（跳过 Workflows）$(date +'%Y-%m-%d %H:%M:%S')"
+          
+          # 推送前再次确认：移除 workflow 目录的变更（双重保障）
+          git reset HEAD -- .github/workflows/
+          git checkout -- .github/workflows/
+          
+          git push origin develop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 处理合并冲突（仅当推送失败时触发）
+        if: failure()
+        run: |
+          echo "⚠️  推送失败，检测到冲突，创建同步PR"
+          sync_branch="sync-upstream-$(date +%Y%m%d%H%M%S)"
+          git checkout -b $sync_branch
+          
+          # 仅添加非 workflow 目录的变更
+          git add . -- ':!.github/workflows/'
+          if ! git diff --cached --quiet; then
+            git commit -am "🔄 同步上游分支（跳过 Workflows）$(date +'%Y-%m-%d')"
+          fi
+          
+          git push origin $sync_branch
+          # 移除标签参数（避免标签不存在报错）
+          gh pr create \
+            --title "🔄 上游同步: $(date +'%Y-%m-%d')（跳过 Workflows）" \
+            --body "自动同步上游 develop 分支，已忽略 .github/workflows/ 目录变更\n上游仓库：https://github.com/aaa1115910/bv.git" \
+            --base develop \
+            --head $sync_branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
