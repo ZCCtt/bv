@@ -1,4 +1,4 @@
-name: Sync Fork (Skip Workflows)
+name: Sync Fork (彻底跳过 Workflows)
 
 on:
   schedule:
@@ -19,7 +19,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0  # 拉取所有历史
 
-      - name: Configure Git (忽略 workflow 文件)
+      - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -30,40 +30,37 @@ jobs:
           fi
           git fetch upstream
 
-          # 关键：标记 workflow 目录为"不跟踪变更"，彻底跳过合并
-          mkdir -p .github/workflows/
-          git update-index --assume-unchanged .github/workflows/** || true
-
       - name: Install GitHub CLI (if missing)
         run: sudo apt-get update && sudo apt-get install -y gh
 
-      - name: Sync with upstream (跳过 workflows)
+      - name: Sync with upstream (排除 workflow 文件)
         run: |
           git checkout develop
           git pull origin develop  # 拉取本地最新变更
 
-          # 修复合并命令：移除无效的目录参数，仅合并上游分支
-          if git merge upstream/develop --no-edit; then
-            echo "✅ 合并成功（已跳过 workflow 文件），推送变更"
+          # 关键：合并上游所有文件，但排除 .github/workflows/ 目录
+          # 语法：git merge <上游分支> --no-edit -- <要合并的路径> :! <要排除的路径>
+          if git merge upstream/develop --no-edit -- . :!.github/workflows/; then
+            echo "✅ 合并成功（已排除 workflow 文件），推送变更"
             git push origin develop
           else
             echo "⚠️  检测到冲突（非 workflow 文件），创建PR"
             sync_branch="sync-upstream-$(date +%Y%m%d%H%M%S)"
             git checkout -b $sync_branch
             
-            # 仅添加非 workflow 目录的冲突文件，避免空提交
+            # 仅添加非 workflow 目录的冲突文件
             git add . -- ':!.github/workflows/'
-            # 若有变更则提交，无变更则跳过（避免空提交报错）
+            # 避免空提交
             if git diff --cached --quiet; then
               echo "无需要提交的变更，直接推送分支"
             else
-              git commit -am "自动同步上游分支（跳过 workflows）$(date +'%Y-%m-%d')"
+              git commit -am "自动同步上游分支（排除 workflows）$(date +'%Y-%m-%d')"
             fi
             
             git push origin $sync_branch
             gh pr create \
-              --title "🔄 上游同步: $(date +'%Y-%m-%d')（跳过 workflows）" \
-              --body "自动同步上游 develop 分支，已忽略 .github/workflows/ 目录变更" \
+              --title "🔄 上游同步: $(date +'%Y-%m-%d')（排除 workflows）" \
+              --body "自动同步上游 develop 分支，已强制排除 .github/workflows/ 目录（避免权限问题）" \
               --base develop \
               --head $sync_branch \
               --label "sync-upstream"
