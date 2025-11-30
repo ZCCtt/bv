@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write        # 仅需核心代码推送权限
-      pull-requests: write  # 冲突时创建PR权限（可选）
+      pull-requests: write  # 冲突时创建PR权限
 
     steps:
       - name: Checkout repository
@@ -24,17 +24,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # 1. 添加上游远程（避免重复）
+          # 添加上游远程（避免重复）
           if ! git remote | grep -q "upstream"; then
             git remote add upstream https://github.com/aaa1115910/bv.git
           fi
           git fetch upstream
 
-          # 2. 配置 Git 忽略上游 workflow 目录的变更（关键步骤）
-          # 原理：告诉 Git 对该目录"不跟踪"上游变更，保持本地版本不变
-          git update-index --assume-unchanged .github/workflows/* || true
-          # 若本地暂无 workflow 目录，先创建空目录避免报错
+          # 关键：标记 workflow 目录为"不跟踪变更"，彻底跳过合并
           mkdir -p .github/workflows/
+          git update-index --assume-unchanged .github/workflows/** || true
 
       - name: Install GitHub CLI (if missing)
         run: sudo apt-get update && sudo apt-get install -y gh
@@ -44,16 +42,24 @@ jobs:
           git checkout develop
           git pull origin develop  # 拉取本地最新变更
 
-          # 3. 合并上游变更（自动跳过 workflow 文件）
-          if git merge upstream/develop --no-edit --strategy-option=theirs .github/workflows/; then
+          # 修复合并命令：移除无效的目录参数，仅合并上游分支
+          if git merge upstream/develop --no-edit; then
             echo "✅ 合并成功（已跳过 workflow 文件），推送变更"
             git push origin develop
           else
             echo "⚠️  检测到冲突（非 workflow 文件），创建PR"
             sync_branch="sync-upstream-$(date +%Y%m%d%H%M%S)"
             git checkout -b $sync_branch
-            git add .
-            git commit -am "自动同步上游分支（跳过 workflows）$(date +'%Y-%m-%d')"
+            
+            # 仅添加非 workflow 目录的冲突文件，避免空提交
+            git add . -- ':!.github/workflows/'
+            # 若有变更则提交，无变更则跳过（避免空提交报错）
+            if git diff --cached --quiet; then
+              echo "无需要提交的变更，直接推送分支"
+            else
+              git commit -am "自动同步上游分支（跳过 workflows）$(date +'%Y-%m-%d')"
+            fi
+            
             git push origin $sync_branch
             gh pr create \
               --title "🔄 上游同步: $(date +'%Y-%m-%d')（跳过 workflows）" \
